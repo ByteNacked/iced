@@ -1,0 +1,14 @@
+[package]
+name = "icedmain"
+version = "0.0.0"
+edition = "2018"
+publish = false
+
+[workspace]
+
+[[bin]]
+name = "iced-main"
+path = "main.rs"
+
+[dependencies]
+iced = { path = "iced" }
