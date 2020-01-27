@@ -6,9 +6,9 @@
 // To run the code:
 //     $ cargo run
 
-use iced::generate_storage;
+use iced::generate_storage_ty;
 
-generate_storage!(
+generate_storage_ty!(
     struct MyStorage {
         name : &str,
         calib : u32,
