@@ -11,4 +11,5 @@ name = "iced-main"
 path = "main.rs"
 
 [dependencies]
+iced-macros = { path = "iced-macros" }
 iced = { path = "iced" }

@@ -1,21 +1,10 @@
 [package]
 name = "iced"
-version = "0.0.0"
+version = "0.1.0"
+authors = ["Роман Масленников <m3angreen@gmail.com>"]
 edition = "2018"
-autotests = false
-publish = false
 
-[lib]
-proc-macro = true
-
-[[test]]
-name = "tests"
-path = "tests/progress.rs"
-
-[dev-dependencies]
-trybuild = "1.0"
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
-syn = { version = "1.0", features = ["full", "extra-traits", "derive"] }
-proc-macro2 = "1.0"
-quote = "1.0"
+iced-macros = { path = "../iced-macros" }

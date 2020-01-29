@@ -1,61 +1,42 @@
-extern crate proc_macro;
+#![feature(const_generics)]
 
-use proc_macro::TokenStream;
-use proc_macro2::Span;
-use syn::{parse_macro_input, Result, Field, Fields, ItemStruct, Ident, FieldsNamed};
-use syn::parse::{Parse, ParseStream};
-use quote::quote;
 
-//struct MyMacroInput {
-//    f : Field,
-//}
-//
-//impl Parse for MyMacroInput {
-//    fn parse(input: ParseStream) -> Result<Self> {
-//        let f = Field::parse_named(input)?;
-//
-//        Ok(MyMacroInput {
-//            f
-//        })
-//    }
-//}
+use core::ops::Range;
 
-#[proc_macro]
-pub fn generate_storage_ty(input: TokenStream) -> TokenStream {
-    let i = parse_macro_input!(input as ItemStruct);
+pub enum MemoryError {
+    OutOfSpace,
+    OutOfRange,
+    BadAlignment,
+    CrcNotMatched,
+}
 
-    //eprint!("{:#?}", &i);
+pub trait Storage {
+    type Error;
+    //fn new(addr_range : Range<usize>) -> Self;
+    fn write(&mut self, uid : usize, buf : &[u8]);
+    fn read(&self, uid : usize, buf : &mut [u8]) -> usize;
+}
 
-    let ty_name_str = i.ident.to_string();
-    let ty_name = Ident::new(&ty_name_str, Span::call_site());
+struct DefaultStorage;
 
-    let fields = if let ItemStruct { fields : Fields::Named( FieldsNamed{ named, .. } ), .. } = &i {
-        named
-    } else {
-        unimplemented!()
-    };
-    //eprint!("fields : {:#?}", &fields);
+impl Storage for DefaultStorage {
 
-    let field_name : Vec<&_> = fields.into_iter().filter_map(|f| {
-        f.ident.as_ref()
-    }).collect();
+    type Error = ();
 
-    let field_ty : Vec<&_> = fields.into_iter().map(|f| {
-        &f.ty
-    }).collect();
+    fn write(&mut self, uid : usize, buf : &[u8]) {
+        println!("Write! uid: {}", uid);
+    }
+    fn read(&self, uid : usize, buf : &mut [u8]) -> usize {
+        println!("Read! uid: {}", uid);
+        0
+    }
+}
 
-    let out = quote!(
-        use $crate::Record;
-        use $crate::Storage;
 
-        struct #ty_name<A> {
-            #( #field_name : #field_ty),*
-        }
-
-        impl<A : Storage> #ty_name<A> {
-            
-        }
-    );
-
-    TokenStream::from(out)
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn it_works() {
+        assert_eq!(2 + 2, 4);
+    }
 }
