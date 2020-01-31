@@ -17,19 +17,50 @@ pub trait Storage {
     fn read(&self, uid : usize, buf : &mut [u8]) -> usize;
 }
 
-struct DefaultStorage;
+pub trait ListStorage {
+    /// Scan and populate list of list saved lists
+    fn scan(&self, ll : &mut [usize]);
+    // Get adress register
+    fn car(&self, list : usize) -> usize;
+    // Get data register
+    fn cdr(&self, list : usize) -> &'static [u8];
+    // Get tag register
+    fn ctr(&self, list : usize) -> u16;
+    // Get crc register
+    fn ccr(&self, list : usize) -> u16;
+    // Appned to head of list
+    fn cons(&mut self, list : usize, tag : u16, crc : u16, data : &[u8]) -> Result<usize, ()>;
+}
 
-impl Storage for DefaultStorage {
+struct DefaultStorage {
+    m : [u8;0x100],
+}
 
-    type Error = ();
-
-    fn write(&mut self, uid : usize, buf : &[u8]) {
-        println!("Write! uid: {}", uid);
+impl ListStorage for DefaultStorage {
+    fn scan(&self, ll : &mut [usize]) {
+        todo!()
     }
-    fn read(&self, uid : usize, buf : &mut [u8]) -> usize {
-        println!("Read! uid: {}", uid);
-        0
+
+    fn car(&self, list : usize) -> usize {
+        todo!()
     }
+
+    fn cdr(&self, list : usize) -> &'static [u8] {
+        todo!()
+    }
+
+    fn ctr(&self, list : usize) -> u16 {
+        todo!()
+    }
+
+    fn ccr(&self, list : usize) -> u16 {
+        todo!()
+    }
+
+    fn cons(&mut self, list : usize, tag : u16, crc : u16, data : &[u8]) -> Result<usize, ()> {
+        todo!()
+    }
+
 }
 
 
