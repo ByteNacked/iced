@@ -17,15 +17,8 @@ use core::ops::Range;
 use core::mem::transmute;
 use core::mem::size_of;
 use core::slice::from_raw_parts_mut;
+use crc::crc32::{Digest, IEEE_TABLE, IEEE, Hasher32};
 
-pub trait Hasher32 {
-    /// Resets CRC calculation to `initial` value
-    fn reset(&mut self);
-    /// Updates CRC calculation with input byte array `bytes`
-    fn write(&mut self, bytes: &[u8]);
-    /// Returns checksum after being XOR'd with `final_xor`
-    fn sum32(&self) -> u32;
-}
 
 pub enum Error {
     OutOfSpace,
@@ -87,20 +80,21 @@ impl Storage {
         let mut stats = InitStats { err_cnt : 0, unique_tags : 0 };
         
         let mut idx = 0;
+        let mut size = 0;
         while idx < self.capacity - size_of::<Header>() {
             match self.header_validate(idx, crc) {
                 Ok(sz) => {
                     let header = self.header_from_idx(idx);
                     list[header.tag].ptr = Some(header);
                     idx += sz;
+                    size += size;
                 }
                 Err(_) => {
                     idx += 1;
                 }
             }
         }
-
-        self.size = todo!();
+        self.size = size;
         
         stats
     }
@@ -312,7 +306,37 @@ mod tests {
 
     #[test]
     fn array_test() {
-        let array = DefaultStorage([0u8; 10]);
+        //let array = DefaultStorage([0u8; 10]);
+        //let crc = Digest::new(crc32::IEEE);
+    }
+
+
+    #[test]
+    fn crc32_test() {
+        let mut crc = Digest::new(IEEE);
+        let b = [0xA5u8];
+        crc.write(&b);
+        let res : u32 = crc.sum32();
+        assert_eq!(res, 0x74BEB8EA);
+        
+        crc.reset();
+        let b = [0xA5,0xA5,0xA5,0xA5];
+        crc.write(&b);
+        let res : u32 = crc.sum32();
+        assert_eq!(res, 0xF18EB66B);
     }
 
 }
+
+
+
+
+
+
+
+
+
+
+
+
+

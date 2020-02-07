@@ -8,3 +8,4 @@ edition = "2018"
 
 [dependencies]
 iced-macros = { path = "../iced-macros" }
+crc = "1.8.1"
