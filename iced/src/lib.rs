@@ -1,77 +1,57 @@
-#![feature(
-    associated_type_bounds,
-    const_fn,
-    const_fn_union,
-    const_generics,
-    const_if_match,
-    const_mut_refs,
-    const_panic,
-    const_transmute,
-    maybe_uninit_extra,
-    maybe_uninit_ref,
-    maybe_uninit_slice_assume_init,
-    track_caller,
-    untagged_unions
-)]
-
 #![allow(dead_code, unused_imports)]
-#![allow(incomplete_features)]
 
 use core::mem::size_of;
 use core::slice::{from_raw_parts_mut, from_raw_parts};
 
-// TODO: implement errors
-// TODO: WORD_SIZE const
+// TODO: implement errors and error tests
+// TODO: validity check on fn get
 
-pub trait StorageHasher32 {
-    fn reset(&mut self);
-
-    fn write(&mut self, words: &[u32]);
-
-    fn sum(&self) -> u32;
-}
-
-pub enum Error {
-    OutOfSpace,
-    ValidateOutOfRange,
-    CrcNotMatched,
-    BadAlignment,
-}
-
-pub struct InitStats {
-    words_wasted : usize,
-    unique_tags : usize,
-}
+// Minimal addressing unit (and aligment)
+pub type Word = u32;
+// Header len in words
+const HEADER_LEN : usize = size_of::<Header>() / size_of::<Word>();
+// Word size in bytes
+const WORD_SIZE : usize = size_of::<Word>();
 
 #[repr(C)]
 #[derive(PartialEq, Eq, Debug)]
 pub struct Header {
-    tag  : u32,
-    sz   : u32,
+    tag  : Word,
+    /// Size of payload in words
+    sz   : Word,
     crc  : u32,
+}
+
+#[derive(Debug)]
+pub enum Error {
+    OutOfFreeSpace,
+    CorruptedRecordOnGet,
 }
 
 #[derive(Copy, Clone, PartialEq, Eq, Debug)]
 pub struct RecordDesc {
-    pub tag : u32,
+    pub tag : Word,
     pub ptr : Option<&'static Header>,
 }
 
+#[derive(Debug)]
+pub struct InitStats {
+    words_wasted : usize,
+    unique_tags  : usize,
+}
+
 pub struct Storage {
-    storage : &'static mut [u32],
-    current  : usize,
+    storage : &'static mut [Word],
+    current : usize,
 }
 
 impl Storage {
 
-    /// Length in words
-    const LEN_OF_HEADER : usize = size_of::<Header>() / size_of::<u32>();
-
     pub fn new(start_addr : usize, capacity : usize) -> Self {
-        assert!(start_addr % 4 == 0);
-        assert!(capacity % 4 == 0);
+        assert!(start_addr % WORD_SIZE == 0);
+        assert!(capacity % WORD_SIZE == 0);
 
-        let storage = unsafe { from_raw_parts_mut(start_addr as *mut _, capacity / size_of::<u32>()) };
+        let storage = unsafe { from_raw_parts_mut(start_addr as *mut _, capacity / WORD_SIZE) };
 
         Self {
             storage,
@@ -90,15 +70,16 @@ impl Storage {
         let capacity = self.storage.len();
         
         // Scanning through whole storage to find all valid records
-        while idx < capacity - Self::LEN_OF_HEADER {
+        while idx < capacity - HEADER_LEN {
             let res = self.validate_record(idx, hasher);
             match res {
-                Ok(header) => {
+                Some(header) => {
+                    assert_eq!(list[header.tag as usize].tag, header.tag, "Index in table should match tag!");
                     list[header.tag as usize].ptr = Some(header);
-                    idx += Self::LEN_OF_HEADER + header.sz as usize;
+                    idx += HEADER_LEN + header.sz as usize;
                     last_valid_end = idx;
                 }
-                Err(_) => {
+                None => {
                     idx += 1;
                 }
             }
@@ -125,7 +106,7 @@ impl Storage {
         stats
     }
 
-    fn validate_record(&self, idx : usize, hasher : &mut impl StorageHasher32) -> Result<&'static Header,()> {
+    fn validate_record(&self, idx : usize, hasher : &mut impl StorageHasher32) -> Option<&'static Header> {
         let _tag = self.storage[idx];
         let len = self.storage[idx + 1];
         let crc = self.storage[idx + 2];
@@ -134,7 +115,7 @@ impl Storage {
         let payload_end_idx = payload_start_idx + len as usize;
         // Check payload slice is not out of bounds
         if payload_end_idx > self.storage.len() {
-            return Err(());
+            return None;
         }
         
         // Calculate checksum
@@ -147,26 +128,26 @@ impl Storage {
         // Compare checksums
         let calc_crc = hasher.sum();
         if crc != calc_crc {
-            return Err(());
+            return None;
         }
         
         let header : &Header = unsafe { &*(self.storage[idx .. ].as_ptr() as *const _) };
-        Ok(header)
+        Some(header)
     }
     
-    // Update recordy entry
-    pub fn update(&mut self, record : &mut RecordDesc, payload : &[u32], hasher : &mut impl StorageHasher32) -> Result<(),()> {
-        let record_len = Self::LEN_OF_HEADER + payload.len();
+    /// Update recordy entry
+    pub fn update(&mut self, record : &mut RecordDesc, payload : &[Word], hasher : &mut impl StorageHasher32) -> Result<(),Error> {
+        let record_len = HEADER_LEN + payload.len();
         if self.free_space_in_words() < record_len {
-            return Err(());
+            return Err(Error::OutOfFreeSpace);
         }
 
         let record_slice = &mut self.storage[self.current .. self.current + record_len];
-        let (header_slice, payload_slice) = record_slice.split_at_mut(Self::LEN_OF_HEADER);
+        let (header_slice, payload_slice) = record_slice.split_at_mut(HEADER_LEN);
 
         // Fill header
         header_slice[0] = record.tag;
-        header_slice[1] = payload.len() as u32;
+        header_slice[1] = payload.len() as Word;
 
         // Copy payload
         payload_slice.copy_from_slice(payload);
@@ -176,7 +157,7 @@ impl Storage {
         hasher.write(&header_slice[0 .. 2]);
         hasher.write(payload_slice);
         let checksum = hasher.sum();
-        header_slice[2] = checksum;
+        header_slice[2] = checksum as Word;
 
         // Update record descriptor
         let updated_header : &Header = unsafe { &*(header_slice.as_ptr() as *const Header) };
@@ -189,38 +170,38 @@ impl Storage {
     }
     
     /// Get record payload
-    pub fn get(&mut self, record : &RecordDesc) -> Result<&'static [u32],()> {
+    pub fn get(&mut self, record : &RecordDesc) -> Result<Option<&'static [u32]>,Error> {
         match record.ptr {
             Some(header) => {
                 // Basic sanity check
                 if header.tag == record.tag {
                     unsafe {
                         let header_ptr = header as *const _ as *const u32;
-                        let payload_ptr = header_ptr.offset(Self::LEN_OF_HEADER as isize);
-                        Ok(from_raw_parts(payload_ptr, header.sz as usize))
+                        let payload_ptr = header_ptr.offset(HEADER_LEN as isize);
+                        Ok(Some(from_raw_parts(payload_ptr, header.sz as usize)))
                     }
                 } else {
-                    Err(())
+                    Err(Error::CorruptedRecordOnGet)
                 }
             },
-            None => Err(()),
+            None => Ok(None),
         }
     }
 
     /// Total amount of occupied storage space in bytes
     pub fn len(&self) -> usize {
-        self.current * size_of::<u32>()
+        self.current * WORD_SIZE
     }
     /// Total storage space in bytes
     pub fn capacity(&self) -> usize {
-        self.storage.len() * size_of::<u32>()
+        self.storage.len() * WORD_SIZE
     }
 
     fn free_space_in_words(&self) -> usize {
         self.storage.len() - self.current
     }
 
-    fn is_ffed(word : u32) -> bool {
+    fn is_ffed(word : Word) -> bool {
         if word == !0 {
             return true;
         }
@@ -231,15 +212,21 @@ impl Storage {
         todo!()
     }
 
-
     fn payload_from_header_slice(&self, _header : &'static Header) -> Result<&'static [u32],()> {
         todo!()
     }
 }
 
+pub trait StorageHasher32 {
+    fn reset(&mut self);
+    fn write(&mut self, words: &[u32]);
+    fn sum(&self) -> u32;
+}
 
+#[allow(dead_code, unused_imports)]
 #[cfg(test)]
 mod tests {
+
     use super::*;
     use crc::crc32::{Digest, IEEE_TABLE, IEEE, Hasher32};
     use crc::CalcType;
@@ -251,7 +238,7 @@ mod tests {
 
         fn write(&mut self, words: &[u32]) {
             let bytes = unsafe { 
-                from_raw_parts(words.as_ptr() as *const u8, words.len() * size_of::<u32>()) 
+                from_raw_parts(words.as_ptr() as *const u8, words.len() * WORD_SIZE) 
             };
             <Digest as Hasher32>::write(self, bytes);
         }
@@ -267,14 +254,14 @@ mod tests {
 
     fn new_params_from_array(storage_mem : &mut [u32] ) -> (usize, usize) {
         let start_addr = storage_mem.as_mut_ptr() as usize;
-        let capacity = size_of::<u32>() * storage_mem.len();
+        let capacity = WORD_SIZE * storage_mem.len();
 
         (start_addr, capacity)
     }
 
     fn new_storage(storage_mem : &mut [u32] ) -> Storage {
         let start_addr = storage_mem.as_mut_ptr() as usize;
-        let capacity = size_of::<u32>() * storage_mem.len();
+        let capacity = WORD_SIZE * storage_mem.len();
 
         Storage::new(start_addr, capacity)
     }
@@ -302,10 +289,10 @@ mod tests {
         let mut crc32 = crc32_ethernet();
         
         storage.update(&mut rec_desc, &rec_payload, &mut crc32).unwrap();
-        assert_eq!(storage.len(), (Storage::LEN_OF_HEADER + rec_payload.len()) * size_of::<u32>() );
+        assert_eq!(storage.len(), (HEADER_LEN + rec_payload.len()) * WORD_SIZE );
         assert!(&rec_desc.ptr.is_some());
         
-        let out_rec_payload = storage.get(&rec_desc).unwrap();
+        let out_rec_payload = storage.get(&rec_desc).unwrap().unwrap();
         assert_eq!(&rec_payload, out_rec_payload);
 
 
@@ -319,9 +306,55 @@ mod tests {
                 ptr : None,
             },
         ];
-        let stats = storage.init(&mut desc_list, &mut crc32);
+        let _stats = storage.init(&mut desc_list, &mut crc32);
         assert_eq!(&desc_list[1], &rec_desc);
+        //println!("Desc list : {:#?}", &desc_list);
+    }
 
+    #[test]
+    fn series_of_records_test() {
+        let mut storage_mem = [!0u32;0x100];
+        let mut storage = new_storage(&mut storage_mem[..]);
+        let mut crc32 = crc32_ethernet();
+
+        let mut desc_list = [
+            RecordDesc {
+                tag : 0,
+                ptr : None,
+            },
+            RecordDesc {
+                tag : 1,
+                ptr : None,
+            },
+            RecordDesc {
+                tag : 2,
+                ptr : None,
+            },
+        ];
+
+        let e0 = [!42u32; 10];
+        storage.update(&mut desc_list[0], &e0, &mut crc32).unwrap();
+
+        let e1 = [0x7777_7777; 3];
+        storage.update(&mut desc_list[1], &e1, &mut crc32).unwrap();
+
+        let e0 = [0x6666_6666; 3];
+        storage.update(&mut desc_list[0], &e0, &mut crc32).unwrap();
+
+        let e2 = [0x5555_5555; 3];
+        storage.update(&mut desc_list[2], &e2, &mut crc32).unwrap();
+
+        let e0 = [0xA5B5A5A5u32; 2];
+        storage.update(&mut desc_list[0], &e0, &mut crc32).unwrap();
+
+        let e1 = [66u32; 5];
+        storage.update(&mut desc_list[1], &e1, &mut crc32).unwrap();
+        
+        storage.init(&mut desc_list, &mut crc32);
+        assert_eq!(storage.get(&desc_list[0]).unwrap().unwrap(), &e0);
+        assert_eq!(storage.get(&desc_list[1]).unwrap().unwrap(), &e1);
+        assert_eq!(storage.get(&desc_list[2]).unwrap().unwrap(), &e2);
+        
         //println!("Desc list : {:#?}", &desc_list);
     }
 
@@ -351,16 +384,3 @@ mod tests {
     //}
 
 }
-
-
-
-
-
-
-
-
-
-
-
-
-
