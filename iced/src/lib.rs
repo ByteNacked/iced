@@ -11,7 +11,7 @@ pub type Word = u32;
 // Header len in words
 const HEADER_LEN : usize = size_of::<Header>() / size_of::<Word>();
 // Word size in bytes
-const WORD_SIZE : usize = size_of::<Word>();
+pub const WORD_SIZE : usize = size_of::<Word>();
 
 #[repr(C)]
 #[derive(PartialEq, Eq, Debug)]
@@ -170,7 +170,7 @@ impl Storage {
     }
     
     /// Get record payload
-    pub fn get(&mut self, record : &RecordDesc) -> Result<Option<&'static [u32]>,Error> {
+    pub fn get(&self, record : &RecordDesc) -> Result<Option<&'static [u32]>,Error> {
         match record.ptr {
             Some(header) => {
                 // Basic sanity check
@@ -223,6 +223,26 @@ pub trait StorageHasher32 {
     fn sum(&self) -> u32;
 }
 
+use crc::crc32::{Digest, Hasher32};
+
+impl StorageHasher32 for Digest {
+    fn reset(&mut self) {
+        <Digest as Hasher32>::reset(self);
+    }
+
+    fn write(&mut self, words: &[u32]) {
+        let bytes = unsafe { 
+            from_raw_parts(words.as_ptr() as *const u8, words.len() * WORD_SIZE) 
+        };
+        <Digest as Hasher32>::write(self, bytes);
+    }
+
+    fn sum(&self) -> u32 {
+        <Digest as Hasher32>::sum32(self)
+    }
+}
+
+
 #[allow(dead_code, unused_imports)]
 #[cfg(test)]
 mod tests {
@@ -231,22 +251,6 @@ mod tests {
     use crc::crc32::{Digest, IEEE_TABLE, IEEE, Hasher32};
     use crc::CalcType;
 
-    impl StorageHasher32 for Digest {
-        fn reset(&mut self) {
-            <Digest as Hasher32>::reset(self);
-        }
-
-        fn write(&mut self, words: &[u32]) {
-            let bytes = unsafe { 
-                from_raw_parts(words.as_ptr() as *const u8, words.len() * WORD_SIZE) 
-            };
-            <Digest as Hasher32>::write(self, bytes);
-        }
-
-        fn sum(&self) -> u32 {
-            <Digest as Hasher32>::sum32(self)
-        }
-    }
 
     fn crc32_ethernet() -> impl StorageHasher32 {
         Digest::new_custom(IEEE, !0u32, 0u32, CalcType::Normal)

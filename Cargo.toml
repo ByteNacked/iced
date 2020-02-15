@@ -13,3 +13,4 @@ path = "main.rs"
 [dependencies]
 iced-macros = { path = "iced-macros" }
 iced = { path = "iced" }
+crc = { version = "2.0", git = "https://github.com/mrhooray/crc-rs.git" }

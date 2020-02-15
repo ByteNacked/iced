@@ -66,45 +66,105 @@ pub fn generate_storage_ty(input: TokenStream) -> TokenStream {
         }
     }).collect();
 
+
+    let max_recods_num = ExprLit {
+        attrs : vec![],
+        lit : Lit::Int(LitInt::new(&fields.len().to_string() , Span::call_site())),
+    };
+
+
     let out = quote!(
         //use $crate::Record;
-        //use ::iced::Storage;
+        use ::iced::{
+            Storage,
+            RecordDesc,
+            Word,
+            Error,
+            WORD_SIZE,
+            StorageHasher32,
+            InitStats,
+        };
 
-        const VALUE_MAX_SZ : usize = 0x40;
+        const MAX_RECORD_SZ : usize = 0x80;
+        const MAX_RECORDS_NUMBER : usize = #max_recods_num;
 
-        union #un_ty_name {
-            #( #field_name : #field_ty, )*
-            buf : [u8;VALUE_MAX_SZ],
+        //union #un_ty_name {
+        //    #( #field_name : #field_ty, )*
+        //    buf : [u8;VALUE_MAX_SZ],
+        //}
+
+        pub struct #ty_name {
+            storage      : Storage,
+            record_table : [RecordDesc; MAX_RECORDS_NUMBER],
         }
 
-        pub struct #ty_name<S> {
-            #( #tail_names : usize, )*
-            storage : S
-        }
-
-        impl<S : Storage> #ty_name<S> {
-            
-            pub fn new(storage : S) -> Self {
-                use core::default::Default;
+        impl #ty_name {
+            pub fn new(start_addr : usize, capacity : usize) -> Self {
                 Self {
-                    storage,
-                    #( #tail_names : 0,)*
+                    storage : Storage::new(start_addr, capacity),
+                    record_table : [
+                        #(RecordDesc {
+                            tag : #uids,
+                            ptr : None,
+                        }),*
+                    ],
                 }
             }
 
+            pub fn init(&mut self, hasher : &mut impl StorageHasher32) -> InitStats {
+                self.storage.init(&mut self.record_table, hasher)
+            }
+
             #( 
-                pub fn #getter_names(&self) ->  #field_ty {
-                    let mut buf = [0;0x40];
-                    self.storage.read(#uids, &mut buf);
-                    #field_ty::default()
+                pub fn #getter_names(&self) ->  Result<Option<&'static #field_ty>, Error> {
+                    let record_desc = &self.record_table[#uids];
+                    let some = self.storage.get(record_desc)?;
+                    
+                    match some {
+                        Some(payload) => {
+                            unsafe {
+                                let field_ptr = payload.as_ptr() as usize as *const #field_ty;
+                                Ok(Some(&*field_ptr))
+                                //Ok(Some(&0))
+                            }
+                        }
+                        None => Ok(None),
+                    }
                 }
             )*
+
             #( 
-                pub fn #setter_names(&mut self, #field_name : #field_ty) {
-                    let mut buf = [0;0x40];
-                    self.storage.write(#uids, &buf);
+                pub fn #setter_names(&mut self, #field_name : #field_ty, hasher : &mut impl StorageHasher32) -> Result<(),Error> {
+                    let mut record_desc = &mut self.record_table[#uids];
+                    
+                    let field_ptr : *const Word = (&#field_name) as *const _ as usize as *const Word;
+                    const FILED_SIZE : usize = ::core::mem::size_of::<#field_ty>();
+                    let payload_slice_sz : usize = match FILED_SIZE {
+                        0 => 0,
+                        n => {
+                            if n >= WORD_SIZE {
+                                n / WORD_SIZE
+                            } else {
+                                WORD_SIZE
+                            }
+                        }
+                    };
+                    let src_words : &[Word] = unsafe { ::core::slice::from_raw_parts(field_ptr, payload_slice_sz) };
+                    self.storage.update(record_desc, src_words, hasher)
                 }
             )*
+        }
+
+        impl ::core::fmt::Debug for #ty_name {
+            fn fmt(&self, f: &mut ::core::fmt::Formatter<'_>) -> ::core::fmt::Result {
+                    write!(f, "{} {{\n", stringify!(#ty_name))?;
+                    #( 
+                        let name_str = stringify!( #field_name );
+                        let value = self.#getter_names();
+                        write!(f, "    {} : {:?}\n", name_str, value)?;
+                    )*
+                    write!(f, "}}\n")
+            }
         }
     );
 
