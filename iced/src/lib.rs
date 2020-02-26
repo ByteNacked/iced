@@ -40,19 +40,22 @@ pub struct InitStats {
     unique_tags  : usize,
 }
 
-pub struct Storage {
-    storage : &'static mut [Word],
+pub trait StorageMem {
+    type Error;
+    fn write(&mut self, offset_words : usize, word : Word) -> Result<(),Error>;
+    fn read(&self, offset_words : usize) -> Word;
+    fn read_slice(&self, offset_start : usize, offset_end : usize) -> &'static [Word];
+    fn len(&self) -> usize;
+}
+
+pub struct Storage<S : StorageMem> {
+    storage : S,
     current : usize,
 }
 
-impl Storage {
+impl<S : StorageMem> Storage<S> {
 
-    pub fn new(start_addr : usize, capacity : usize) -> Self {
-        assert!(start_addr % WORD_SIZE == 0);
-        assert!(capacity % WORD_SIZE == 0);
-
-        let storage = unsafe { from_raw_parts_mut(start_addr as *mut _, capacity / WORD_SIZE) };
-
+    pub fn new(storage : S) -> Self {
         Self {
             storage,
             current : 0,
@@ -88,7 +91,7 @@ impl Storage {
         // Scannig from last record end position, to determine that
         // rest flash memory wasn't already written (NOT 0xFF'ed)
         for idx in last_valid_end .. capacity {
-            if !Self::is_ffed(self.storage[idx]) {
+            if !Self::is_ffed(self.storage.read(idx)) {
                 size = idx + 1;
                 stats.words_wasted += 1;
             }
@@ -107,9 +110,9 @@ impl Storage {
     }
 
     fn validate_record(&self, idx : usize, hasher : &mut impl StorageHasher32) -> Option<&'static Header> {
-        let _tag = self.storage[idx];
-        let len = self.storage[idx + 1];
-        let crc = self.storage[idx + 2];
+        let _tag = self.storage.read(idx);
+        let len = self.storage.read(idx + 1);
+        let crc = self.storage.read(idx + 2);
 
         let payload_start_idx = idx + 3;
         let payload_end_idx = payload_start_idx + len as usize;
@@ -120,9 +123,9 @@ impl Storage {
         
         // Calculate checksum
         hasher.reset();
-        let header_part = &self.storage[idx .. idx + 2];
+        let header_part = self.storage.read_slice(idx, idx + 2);
         hasher.write(header_part);
-        let payload_slice = &self.storage[payload_start_idx .. payload_end_idx];
+        let payload_slice = self.storage.read_slice(payload_start_idx, payload_end_idx);
         hasher.write(payload_slice);
         
         // Compare checksums
@@ -131,7 +134,7 @@ impl Storage {
             return None;
         }
         
-        let header : &Header = unsafe { &*(self.storage[idx .. ].as_ptr() as *const _) };
+        let header : &Header = unsafe { &*(self.storage.read_slice(idx, 0).as_ptr() as *const _) };
         Some(header)
     }
     
@@ -142,25 +145,26 @@ impl Storage {
             return Err(Error::OutOfFreeSpace);
         }
 
-        let record_slice = &mut self.storage[self.current .. self.current + record_len];
-        let (header_slice, payload_slice) = record_slice.split_at_mut(HEADER_LEN);
-
+        let header_idx = self.current;
         // Fill header
-        header_slice[0] = record.tag;
-        header_slice[1] = payload.len() as Word;
+        assert!(self.storage.write(header_idx + 0, record.tag).is_ok());
+        assert!(self.storage.write(header_idx + 1, payload.len() as Word).is_ok());
 
+        let payload_idx = header_idx + size_of::<Header>();
         // Copy payload
-        payload_slice.copy_from_slice(payload);
+        for idx in 0 .. payload.len() {
+            assert!(self.storage.write(payload_idx + idx, payload[idx]).is_ok());
+        }
         
         // Calculate and set checksum
         hasher.reset();
-        hasher.write(&header_slice[0 .. 2]);
-        hasher.write(payload_slice);
+        hasher.write(self.storage.read_slice(header_idx, header_idx + 2));
+        hasher.write(self.storage.read_slice(payload_idx, payload_idx + payload.len()));
         let checksum = hasher.sum();
-        header_slice[2] = checksum as Word;
+        assert!(self.storage.write(header_idx + 2, checksum).is_ok());
 
         // Update record descriptor
-        let updated_header : &Header = unsafe { &*(header_slice.as_ptr() as *const Header) };
+        let updated_header : &Header = unsafe { &*(self.storage.read_slice(header_idx, 0).as_ptr() as *const Header) };
         record.ptr = Some(updated_header);
 
         // Update current len
@@ -250,31 +254,42 @@ mod tests {
     use super::*;
     use crc::crc32::{Digest, IEEE_TABLE, IEEE, Hasher32};
     use crc::CalcType;
+    
+    struct TestMem ( [Word;0x100] );
 
+    impl StorageMem for TestMem {
+        type Error = ();
+
+        fn write(&mut self, offset_words : usize, word : Word) -> Result<(),Error> {
+            Ok(self.0[offset_words] = word)
+        }
+
+        fn read(&self, offset_words : usize) -> Word {
+            self.0[offset_words]
+        }
+
+        fn read_slice(&self, offset_start : usize, offset_end : usize) -> &'static [Word] {
+            unsafe { core::mem::transmute(&self.0[offset_start .. offset_end]) }
+        }
+
+        fn len(&self) -> usize {
+            self.0.len()
+        }
+    }
 
     fn crc32_ethernet() -> impl StorageHasher32 {
         Digest::new_custom(IEEE, !0u32, 0u32, CalcType::Normal)
     }
 
-    fn new_params_from_array(storage_mem : &mut [u32] ) -> (usize, usize) {
-        let start_addr = storage_mem.as_mut_ptr() as usize;
-        let capacity = WORD_SIZE * storage_mem.len();
-
-        (start_addr, capacity)
-    }
-
-    fn new_storage(storage_mem : &mut [u32] ) -> Storage {
-        let start_addr = storage_mem.as_mut_ptr() as usize;
-        let capacity = WORD_SIZE * storage_mem.len();
-
-        Storage::new(start_addr, capacity)
+    fn new_storage() -> Storage<TestMem> {
+        Storage::new(TestMem([!0;0x100]))
     }
 
     #[test]
     fn empty_test() {
-        let mut storage_mem = [!0u32;0x100];
-        let (start_addr, capacity) = new_params_from_array(&mut storage_mem[..]);
-        let storage = Storage::new(start_addr, capacity);
+        let storage_mem = [!0u32;0x100];
+        let capacity = storage_mem.len() * size_of::<Word>();
+        let storage = Storage::new(TestMem(storage_mem));
 
         assert_eq!(storage.len(), 0);
         assert_eq!(storage.capacity(), capacity);
@@ -282,8 +297,7 @@ mod tests {
     
     #[test]
     fn new_record_test() {
-        let mut storage_mem = [!0u32;0x100];
-        let mut storage = new_storage(&mut storage_mem[..]);
+        let mut storage = new_storage();
         let mut rec_desc = RecordDesc {
             tag : 1,
             ptr : None,
@@ -297,6 +311,7 @@ mod tests {
         assert!(&rec_desc.ptr.is_some());
         
         let out_rec_payload = storage.get(&rec_desc).unwrap().unwrap();
+        println!("Desc list : {:#?}", &rec_desc);
         assert_eq!(&rec_payload, out_rec_payload);
 
 
@@ -317,8 +332,8 @@ mod tests {
 
     #[test]
     fn series_of_records_test() {
-        let mut storage_mem = [!0u32;0x100];
-        let mut storage = new_storage(&mut storage_mem[..]);
+        let storage_mem = [!0u32;0x100];
+        let mut storage = new_storage();
         let mut crc32 = crc32_ethernet();
 
         let mut desc_list = [
