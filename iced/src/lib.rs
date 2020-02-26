@@ -1,4 +1,7 @@
+#![no_std]
 #![allow(dead_code, unused_imports)]
+
+pub use iced_macros::generate_storage_ty;
 
 use core::mem::size_of;
 use core::slice::{from_raw_parts_mut, from_raw_parts};
@@ -42,13 +45,19 @@ pub struct InitStats {
 
 pub trait StorageMem {
     type Error;
-    fn write(&mut self, offset_words : usize, word : Word) -> Result<(),Error>;
+    fn write(&mut self, offset_words : usize, word : Word) -> Result<(), Self::Error>;
     fn read(&self, offset_words : usize) -> Word;
     fn read_slice(&self, offset_start : usize, offset_end : usize) -> &'static [Word];
     fn len(&self) -> usize;
 }
 
-pub struct Storage<S : StorageMem> {
+pub trait StorageHasher32 {
+    fn reset(&mut self);
+    fn write(&mut self, words: &[u32]);
+    fn sum(&self) -> u32;
+}
+
+pub struct Storage<S> {
     storage : S,
     current : usize,
 }
@@ -115,7 +124,7 @@ impl<S : StorageMem> Storage<S> {
         let crc = self.storage.read(idx + 2);
 
         let payload_start_idx = idx + 3;
-        let payload_end_idx = payload_start_idx + len as usize;
+        let payload_end_idx = payload_start_idx.saturating_add(len as usize);
         // Check payload slice is not out of bounds
         if payload_end_idx > self.storage.len() {
             return None;
@@ -134,7 +143,7 @@ impl<S : StorageMem> Storage<S> {
             return None;
         }
         
-        let header : &Header = unsafe { &*(self.storage.read_slice(idx, 0).as_ptr() as *const _) };
+        let header : &Header = unsafe { &*(self.storage.read_slice(idx, idx).as_ptr() as *const _) };
         Some(header)
     }
     
@@ -150,7 +159,7 @@ impl<S : StorageMem> Storage<S> {
         assert!(self.storage.write(header_idx + 0, record.tag).is_ok());
         assert!(self.storage.write(header_idx + 1, payload.len() as Word).is_ok());
 
-        let payload_idx = header_idx + size_of::<Header>();
+        let payload_idx = header_idx + HEADER_LEN;
         // Copy payload
         for idx in 0 .. payload.len() {
             assert!(self.storage.write(payload_idx + idx, payload[idx]).is_ok());
@@ -164,7 +173,7 @@ impl<S : StorageMem> Storage<S> {
         assert!(self.storage.write(header_idx + 2, checksum).is_ok());
 
         // Update record descriptor
-        let updated_header : &Header = unsafe { &*(self.storage.read_slice(header_idx, 0).as_ptr() as *const Header) };
+        let updated_header : &Header = unsafe { &*(self.storage.read_slice(header_idx, header_idx).as_ptr() as *const Header) };
         record.ptr = Some(updated_header);
 
         // Update current len
@@ -221,14 +230,10 @@ impl<S : StorageMem> Storage<S> {
     }
 }
 
-pub trait StorageHasher32 {
-    fn reset(&mut self);
-    fn write(&mut self, words: &[u32]);
-    fn sum(&self) -> u32;
-}
-
+#[cfg(any(test, feature="test-def"))]
 use crc::crc32::{Digest, Hasher32};
 
+#[cfg(any(test, feature="test-def"))]
 impl StorageHasher32 for Digest {
     fn reset(&mut self) {
         <Digest as Hasher32>::reset(self);
@@ -246,37 +251,37 @@ impl StorageHasher32 for Digest {
     }
 }
 
+#[cfg(any(test, feature="test-def"))]
+pub struct TestMem ( pub [Word;0x100] );
+
+#[cfg(any(test, feature="test-def"))]
+impl StorageMem for TestMem {
+    type Error = ();
+
+    fn write(&mut self, offset_words : usize, word : Word) -> Result<(), Self::Error> {
+        Ok(self.0[offset_words] = word)
+    }
+
+    fn read(&self, offset_words : usize) -> Word {
+        self.0[offset_words]
+    }
+
+    fn read_slice(&self, offset_start : usize, offset_end : usize) -> &'static [Word] {
+        unsafe { core::mem::transmute(&self.0[offset_start .. offset_end]) }
+    }
+
+    fn len(&self) -> usize {
+        self.0.len()
+    }
+}
 
 #[allow(dead_code, unused_imports)]
 #[cfg(test)]
 mod tests {
-
     use super::*;
     use crc::crc32::{Digest, IEEE_TABLE, IEEE, Hasher32};
     use crc::CalcType;
     
-    struct TestMem ( [Word;0x100] );
-
-    impl StorageMem for TestMem {
-        type Error = ();
-
-        fn write(&mut self, offset_words : usize, word : Word) -> Result<(),Error> {
-            Ok(self.0[offset_words] = word)
-        }
-
-        fn read(&self, offset_words : usize) -> Word {
-            self.0[offset_words]
-        }
-
-        fn read_slice(&self, offset_start : usize, offset_end : usize) -> &'static [Word] {
-            unsafe { core::mem::transmute(&self.0[offset_start .. offset_end]) }
-        }
-
-        fn len(&self) -> usize {
-            self.0.len()
-        }
-    }
-
     fn crc32_ethernet() -> impl StorageHasher32 {
         Digest::new_custom(IEEE, !0u32, 0u32, CalcType::Normal)
     }
@@ -311,7 +316,7 @@ mod tests {
         assert!(&rec_desc.ptr.is_some());
         
         let out_rec_payload = storage.get(&rec_desc).unwrap().unwrap();
-        println!("Desc list : {:#?}", &rec_desc);
+        //println!("Desc list : {:#?}", &rec_desc);
         assert_eq!(&rec_payload, out_rec_payload);
 
 

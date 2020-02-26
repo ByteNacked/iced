@@ -10,7 +10,7 @@
 use crc::crc32::{Digest,IEEE};
 use crc::CalcType;
 
-use iced_macros::generate_storage_ty;
+use iced::generate_storage_ty;
 
 #[derive(Debug)]
 pub enum Mode {
@@ -34,25 +34,17 @@ generate_storage_ty! {
     }
 }
 
-fn new_params_from_array(storage_mem : &mut [u32] ) -> (usize, usize) {
-    let start_addr = storage_mem.as_mut_ptr() as usize;
-    let capacity = core::mem::size_of::<u32>() * storage_mem.len();
-
-    (start_addr, capacity)
-}
-
 fn crc32_ethernet() -> impl StorageHasher32 {
     Digest::new_custom(IEEE, !0u32, 0u32, CalcType::Normal)
 }
 
-
 fn main() {
+    
+    let mem = iced::TestMem([!0;0x100]);
 
-    let mut storage_mem = [!0u32;0x1000];
-    let (start_addr, capacity) = new_params_from_array(&mut storage_mem);
-
-    let mut storage = PerMap::new(start_addr, capacity);
+    let mut storage = PerMap::new(mem);
     let mut crc = crc32_ethernet();
+    let _ = storage.init(&mut crc);
     
     storage.set_name(7u32, &mut crc).unwrap();
     storage.set_name(6u32, &mut crc).unwrap();
@@ -68,6 +60,8 @@ fn main() {
     storage.set_barray([false; 5], &mut crc).unwrap();
     storage.set_mode(Mode::Lifting, &mut crc).unwrap();
     storage.set_mode(Mode::InAir, &mut crc).unwrap();
-    
+
+    let stats = storage.init(&mut crc);
+    println!("Stats: {:#?}", stats);
     println!("{:?}", &storage);
 }

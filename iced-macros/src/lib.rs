@@ -2,8 +2,8 @@ extern crate proc_macro;
 
 use proc_macro::TokenStream;
 use proc_macro2::Span;
-use syn::{parse_macro_input, Result, Field, Fields, ItemStruct, Ident, FieldsNamed, ExprLit, Lit, LitInt};
-use syn::parse::{Parse, ParseStream};
+use syn::{parse_macro_input,  Fields, ItemStruct, Ident, FieldsNamed, ExprLit, Lit, LitInt};
+//use syn::parse::{Parse, ParseStream};
 use quote::quote;
 
 //struct MyMacroInput {
@@ -30,7 +30,7 @@ pub fn generate_storage_ty(input: TokenStream) -> TokenStream {
     let ty_name_str = i.ident.to_string();
 
     let ty_name = Ident::new(&ty_name_str, Span::call_site());
-    let un_ty_name = Ident::new(&format!("Recast{}", &ty_name_str), Span::call_site());
+    let _un_ty_name = Ident::new(&format!("Recast{}", &ty_name_str), Span::call_site());
 
     let fields = if let ItemStruct { fields : Fields::Named( FieldsNamed{ named, .. } ), .. } = &i {
         named
@@ -55,7 +55,7 @@ pub fn generate_storage_ty(input: TokenStream) -> TokenStream {
         Ident::new(&format!("get_{}", name.to_string()), name.span())
     }).collect();
 
-    let tail_names : Vec<_> = (&field_name).into_iter().map(|name| {
+    let _tail_names : Vec<_> = (&field_name).into_iter().map(|name| {
         Ident::new(&format!("pos_{}", name.to_string()), name.span())
     }).collect();
     
@@ -77,6 +77,7 @@ pub fn generate_storage_ty(input: TokenStream) -> TokenStream {
         //use $crate::Record;
         use ::iced::{
             Storage,
+            StorageMem,
             RecordDesc,
             Word,
             Error,
@@ -93,15 +94,15 @@ pub fn generate_storage_ty(input: TokenStream) -> TokenStream {
         //    buf : [u8;VALUE_MAX_SZ],
         //}
 
-        pub struct #ty_name {
-            storage      : Storage,
+        pub struct #ty_name<M> {
+            storage      : Storage<M>,
             record_table : [RecordDesc; MAX_RECORDS_NUMBER],
         }
 
-        impl #ty_name {
-            pub fn new(start_addr : usize, capacity : usize) -> Self {
+        impl<M : StorageMem> #ty_name<M> {
+            pub fn new(mem : M) -> Self {
                 Self {
-                    storage : Storage::new(start_addr, capacity),
+                    storage : Storage::new(mem),
                     record_table : [
                         #(RecordDesc {
                             tag : #uids,
@@ -155,7 +156,7 @@ pub fn generate_storage_ty(input: TokenStream) -> TokenStream {
             )*
         }
 
-        impl ::core::fmt::Debug for #ty_name {
+        impl<M : StorageMem> ::core::fmt::Debug for #ty_name<M> {
             fn fmt(&self, f: &mut ::core::fmt::Formatter<'_>) -> ::core::fmt::Result {
                     write!(f, "{} {{\n", stringify!(#ty_name))?;
                     #( 
