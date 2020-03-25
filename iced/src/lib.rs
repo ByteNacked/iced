@@ -231,49 +231,54 @@ impl<S : StorageMem> Storage<S> {
 }
 
 #[cfg(any(test, feature="test-def"))]
-use crc::crc32::{Digest, Hasher32};
+pub use test_def::TestMem;
 
 #[cfg(any(test, feature="test-def"))]
-impl StorageHasher32 for Digest {
-    fn reset(&mut self) {
-        <Digest as Hasher32>::reset(self);
+mod test_def {
+    use super::*;
+
+    pub use crc::crc32::{Digest, Hasher32};
+
+    impl StorageHasher32 for Digest {
+        fn reset(&mut self) {
+            <Digest as Hasher32>::reset(self);
+        }
+
+        fn write(&mut self, words: &[u32]) {
+            let bytes = unsafe { 
+                from_raw_parts(words.as_ptr() as *const u8, words.len() * WORD_SIZE) 
+            };
+            <Digest as Hasher32>::write(self, bytes);
+        }
+
+        fn sum(&self) -> u32 {
+            <Digest as Hasher32>::sum32(self)
+        }
     }
 
-    fn write(&mut self, words: &[u32]) {
-        let bytes = unsafe { 
-            from_raw_parts(words.as_ptr() as *const u8, words.len() * WORD_SIZE) 
-        };
-        <Digest as Hasher32>::write(self, bytes);
-    }
+    pub struct TestMem ( pub [Word;0x100] );
 
-    fn sum(&self) -> u32 {
-        <Digest as Hasher32>::sum32(self)
+    impl StorageMem for TestMem {
+        type Error = ();
+
+        fn write(&mut self, offset_words : usize, word : Word) -> Result<(), Self::Error> {
+            Ok(self.0[offset_words] = word)
+        }
+
+        fn read(&self, offset_words : usize) -> Word {
+            self.0[offset_words]
+        }
+
+        fn read_slice(&self, offset_start : usize, offset_end : usize) -> &'static [Word] {
+            unsafe { core::mem::transmute(&self.0[offset_start .. offset_end]) }
+        }
+
+        fn len(&self) -> usize {
+            self.0.len()
+        }
     }
 }
 
-#[cfg(any(test, feature="test-def"))]
-pub struct TestMem ( pub [Word;0x100] );
-
-#[cfg(any(test, feature="test-def"))]
-impl StorageMem for TestMem {
-    type Error = ();
-
-    fn write(&mut self, offset_words : usize, word : Word) -> Result<(), Self::Error> {
-        Ok(self.0[offset_words] = word)
-    }
-
-    fn read(&self, offset_words : usize) -> Word {
-        self.0[offset_words]
-    }
-
-    fn read_slice(&self, offset_start : usize, offset_end : usize) -> &'static [Word] {
-        unsafe { core::mem::transmute(&self.0[offset_start .. offset_end]) }
-    }
-
-    fn len(&self) -> usize {
-        self.0.len()
-    }
-}
 
 #[allow(dead_code, unused_imports)]
 #[cfg(test)]
@@ -337,7 +342,6 @@ mod tests {
 
     #[test]
     fn series_of_records_test() {
-        let storage_mem = [!0u32;0x100];
         let mut storage = new_storage();
         let mut crc32 = crc32_ethernet();
 
@@ -382,29 +386,31 @@ mod tests {
         //println!("Desc list : {:#?}", &desc_list);
     }
 
-    //#[test]
-    //fn crc32_test() {
-    //    let mut crc = Digest::new_custom(IEEE, !0u32, 0u32, CalcType::Normal);
+    #[test]
+    fn crc32_test() {
 
-    //    crc.reset();
-    //    let b = [0xA5u8];
-    //    crc.write(&b);
-    //    let res : u32 = crc.sum32();
-    //    println!("\n{:x}\n", &res);
-    //    assert_eq!(res, 0xA8E282D1);
+        // CRC-32/MPEG-2 
+        let mut crc = Digest::new_custom(IEEE, !0u32, 0u32, CalcType::Normal);
 
-    //    crc.reset();
-    //    let b = [0xA5u8, 0];
-    //    crc.write(&b);
-    //    let res : u32 = crc.sum32();
-    //    println!("\n{:x}\n", &res);
-    //    assert_eq!(res, 0xA8E282D1);
-    //    
-    //    crc.reset();
-    //    let b = [0xA5,0xA5,0xA5,0xA5];
-    //    crc.write(&b);
-    //    let res : u32 = crc.sum32();
-    //    assert_eq!(res, 0x29928E70);
-    //}
+        //Hasher32::reset(&mut crc);
+        //let b = [0xA5u8];
+        //Hasher32::write(&mut crc, &b);
+        //let res : u32 = crc.sum32();
+        //println!("\n{:x}\n", &res);
+        //assert_eq!(res, 0xA8E282D1);
+
+        //Hasher32::reset(&mut crc);
+        //let b = [0xA5u8, 0];
+        //Hasher32::write(&mut crc, &b);
+        //let res : u32 = crc.sum32();
+        //println!("\n{:x}\n", &res);
+        //assert_eq!(res, 0xA8E282D1);
+        
+        Hasher32::reset(&mut crc);
+        let b = [0xA5,0xA5,0xA5,0xA5];
+        Hasher32::write(&mut crc, &b);
+        let res : u32 = crc.sum32();
+        assert_eq!(res, 0x29928E70);
+    }
 
 }
